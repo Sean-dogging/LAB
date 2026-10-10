@@ -1,0 +1,1286 @@
+import csv
+import math
+import tkinter as tk
+from datetime import datetime
+from tkinter import filedialog, messagebox, ttk
+
+# ======================================================================
+# THEME - PROFESSIONAL NAVY BLUE
+# ======================================================================
+BG = "#F1F5F9"
+CARD = "#FFFFFF"
+CARD2 = "#EAF0F8"
+BORDER = "#D0DAE7"
+PINK = "#2563EB"
+PINK_DARK = "#1D4ED8"
+PINK_LIGHT = "#DBEAFE"
+HEADER_A = "#334155"
+HEADER_B = "#0F172A"
+FG = "#1E293B"
+MUTED = "#64748B"
+GREEN = "#15803D"
+RED = "#DC2626"
+
+FONT = "Segoe UI"
+F_TITLE = (FONT, 18, "bold")
+F_SUB = (FONT, 10)
+F_HEAD = (FONT, 12, "bold")
+F_LABEL = (FONT, 10, "bold")
+F_ENTRY = (FONT, 11)
+F_MSG = (FONT, 9)
+F_SMALL = (FONT, 9)
+F_BIG = (FONT, 16, "bold")
+F_MONO = ("Consolas", 9)
+
+PESO = "\u20b1"
+
+
+def peso(value):
+    return f"{PESO}{value:,.2f}"
+
+
+def lerp_color(c1, c2, t):
+    """Blend two #rrggbb colors (used for the gradient header)."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    r, g, bl = (
+        round(a[i] + (b[i] - a[i]) * t)
+        for i in range(3)
+    )
+    return f"#{r:02x}{g:02x}{bl:02x}"
+
+
+# ======================================================================
+# VALIDATION FUNCTIONS
+# ======================================================================
+def check_name(raw):
+    text = raw.strip()
+    if text == "":
+        return False, None, "Product name must not be empty."
+    if len(text) > 50:
+        return False, None, "Product name is too long (max 50 characters)."
+    return True, text, "Valid product name."
+
+
+def check_quantity(raw):
+    text = raw.strip()
+    if text == "":
+        return False, None, "Quantity is required."
+    try:
+        if "_" in text:
+            raise ValueError("underscore not allowed")
+        quantity = int(text)
+    except ValueError:
+        return False, None, "Quantity must be a whole number (e.g. 10)."
+    if quantity <= 0:
+        return False, None, "Quantity must be greater than zero."
+    return True, quantity, "Valid quantity."
+
+
+def check_price(raw):
+    text = raw.strip().replace(",", "")
+    if text == "":
+        return False, None, "Unit price is required."
+    try:
+        if not set(text) <= set("0123456789.+-"):
+            raise ValueError("invalid characters")
+        price = float(text)
+        if not math.isfinite(price):
+            raise ValueError("not finite")
+    except ValueError:
+        return False, None, "Unit price must be a valid number (e.g. 250.00)."
+    if price <= 0:
+        return False, None, "Unit price must be greater than zero."
+    return True, price, "Valid unit price."
+
+
+# ======================================================================
+# MAIN WINDOW + STATE
+# ======================================================================
+root = tk.Tk()
+root.title("Robust Inventory Form")
+root.geometry("1140x820")
+root.minsize(1020, 740)
+root.configure(bg=BG)
+
+name_var = tk.StringVar()
+quantity_var = tk.StringVar()
+price_var = tk.StringVar()
+search_var = tk.StringVar()
+
+records = []
+next_id = 1
+suppress = False
+sort_col = None
+sort_reverse = False
+
+style = ttk.Style(root)
+style.theme_use("clam")
+
+style.configure(
+    "Pink.Treeview",
+    background="white",
+    fieldbackground="white",
+    foreground=FG,
+    rowheight=28,
+    borderwidth=0,
+    font=(FONT, 10)
+)
+
+style.configure(
+    "Pink.Treeview.Heading",
+    background=PINK,
+    foreground="white",
+    font=(FONT, 10, "bold"),
+    relief="flat",
+    padding=6
+)
+
+style.map(
+    "Pink.Treeview.Heading",
+    background=[("active", PINK_DARK)]
+)
+
+style.map(
+    "Pink.Treeview",
+    background=[("selected", PINK_DARK)],
+    foreground=[("selected", "white")]
+)
+
+style.configure(
+    "Pink.Vertical.TScrollbar",
+    background=PINK_LIGHT,
+    troughcolor=CARD,
+    bordercolor=CARD,
+    arrowcolor=PINK_DARK
+)
+
+style.configure(
+    "Pink.Horizontal.TProgressbar",
+    troughcolor=PINK_LIGHT,
+    background=PINK,
+    bordercolor=PINK_LIGHT,
+    lightcolor=PINK,
+    darkcolor=PINK
+)
+
+
+# ======================================================================
+# REUSABLE WIDGET HELPERS
+# ======================================================================
+def make_card(parent):
+    return tk.Frame(
+        parent,
+        bg=CARD,
+        highlightbackground=BORDER,
+        highlightthickness=1,
+        padx=14,
+        pady=10
+    )
+
+
+def card_title(parent, text):
+    row = tk.Frame(parent, bg=CARD)
+    row.pack(fill="x", pady=(0, 6))
+
+    tk.Label(
+        row,
+        text="\u258e",
+        font=F_HEAD,
+        bg=CARD,
+        fg=PINK
+    ).pack(side="left")
+
+    tk.Label(
+        row,
+        text=text,
+        font=F_HEAD,
+        bg=CARD,
+        fg=FG
+    ).pack(side="left")
+
+    return row
+
+
+def make_button(parent, text, command, kind="primary"):
+    if kind == "primary":
+        bg, hover, fg = PINK, PINK_DARK, "white"
+    elif kind == "danger":
+        bg, hover, fg = "#FEE2E2", "#FECACA", "#B91C1C"
+    else:
+        bg, hover, fg = CARD, PINK_LIGHT, PINK_DARK
+
+    btn = tk.Button(
+        parent,
+        text=text,
+        command=command,
+        font=(FONT, 10, "bold"),
+        bg=bg,
+        fg=fg,
+        activebackground=hover,
+        activeforeground=fg,
+        relief="flat",
+        bd=0,
+        cursor="hand2",
+        padx=12,
+        pady=7,
+        highlightthickness=1,
+        highlightbackground=BORDER
+    )
+
+    btn.bind("<Enter>", lambda e: btn.config(bg=hover))
+    btn.bind("<Leave>", lambda e: btn.config(bg=bg))
+
+    return btn
+
+
+def make_stat(parent, column, title):
+    card = tk.Frame(
+        parent,
+        bg=CARD,
+        highlightbackground=BORDER,
+        highlightthickness=1
+    )
+
+    card.grid(
+        row=0,
+        column=column,
+        sticky="nsew",
+        padx=(0 if column == 0 else 6, 0 if column == 2 else 6)
+    )
+
+    tk.Frame(card, bg=PINK, width=6).pack(side="left", fill="y")
+
+    box = tk.Frame(card, bg=CARD, padx=12, pady=6)
+    box.pack(side="left", fill="both", expand=True)
+
+    tk.Label(
+        box,
+        text=title,
+        font=F_SMALL,
+        bg=CARD,
+        fg=MUTED
+    ).pack(anchor="w")
+
+    value = tk.Label(
+        box,
+        text="0",
+        font=F_BIG,
+        bg=CARD,
+        fg=PINK_DARK
+    )
+    value.pack(anchor="w")
+
+    return value
+
+
+class Field:
+    """Label + Entry with placeholder, colored border and message line."""
+
+    def __init__(self, parent, caption, var, placeholder, hint):
+        self.var = var
+        self.hint = hint
+        self.state = "neutral"
+
+        tk.Label(
+            parent,
+            text=caption,
+            font=F_LABEL,
+            bg=CARD,
+            fg=FG
+        ).pack(anchor="w")
+
+        self.border = tk.Frame(parent, bg=BORDER, padx=2, pady=2)
+        self.border.pack(fill="x", pady=(3, 0))
+
+        self.entry = tk.Entry(
+            self.border,
+            textvariable=var,
+            font=F_ENTRY,
+            bg="white",
+            fg=FG,
+            insertbackground=PINK_DARK,
+            relief="flat",
+            bd=0,
+            highlightthickness=0
+        )
+        self.entry.pack(fill="x", ipady=7)
+
+        self.ph = tk.Label(
+            self.entry,
+            text=placeholder,
+            font=F_ENTRY,
+            bg="white",
+            fg="#94A3B8"
+        )
+        self.ph.place(x=8, rely=0.5, anchor="w")
+        self.ph.bind("<Button-1>", lambda e: self.entry.focus_set())
+
+        self.msg = tk.Label(
+            parent,
+            text=hint,
+            font=F_MSG,
+            bg=CARD,
+            fg=MUTED,
+            anchor="w",
+            justify="left"
+        )
+        self.msg.pack(fill="x", pady=(2, 8))
+
+        self.entry.bind("<FocusIn>", self._focus_in)
+        self.entry.bind("<FocusOut>", self._focus_out)
+
+    def _focus_in(self, event=None):
+        if self.state == "neutral":
+            self.border.config(bg=PINK)
+
+    def _focus_out(self, event=None):
+        if self.state == "neutral":
+            self.border.config(bg=BORDER)
+
+    def refresh_placeholder(self):
+        if self.var.get():
+            self.ph.place_forget()
+        else:
+            self.ph.place(x=8, rely=0.5, anchor="w")
+
+    def show(self, ok, message):
+        self.state = "ok" if ok else "bad"
+        color = GREEN if ok else RED
+        icon = "\u2714 " if ok else "\u2716 "
+        self.msg.config(text=icon + message, fg=color)
+        self.border.config(bg=color)
+
+    def reset(self):
+        self.state = "neutral"
+        self.msg.config(text=self.hint, fg=MUTED)
+        self.border.config(bg=BORDER)
+        self.refresh_placeholder()
+
+
+# ======================================================================
+# LOGIC
+# ======================================================================
+def set_footer(text):
+    footer_status.config(text=text)
+
+
+def log_trace(test_input, expected, actual, ok=True):
+    """Append one line to the Validation Trace Log."""
+    stamp = datetime.now().strftime("%H:%M:%S")
+    log_text.config(state="normal")
+    log_text.insert("end", f"[{stamp}] ", "time")
+    log_text.insert(
+        "end",
+        f"{test_input} | {expected} | {actual}\n",
+        "ok" if ok else "bad"
+    )
+    log_text.see("end")
+    log_text.config(state="disabled")
+
+
+def refresh_form_status(*args):
+    """Update validation status, progress bar and live total."""
+    n_ok, name, _ = check_name(name_var.get())
+    q_ok, qty, _ = check_quantity(quantity_var.get())
+    p_ok, price, _ = check_price(price_var.get())
+
+    valid_count = sum((n_ok, q_ok, p_ok))
+
+    progress["value"] = valid_count / 3 * 100
+    progress_label.config(text=f"{valid_count}/3 fields valid")
+
+    if q_ok and p_ok:
+        total_preview.config(
+            text=f"Live total preview:  {peso(qty * price)}",
+            fg=PINK_DARK
+        )
+    else:
+        total_preview.config(text="Live total preview:  --", fg=MUTED)
+
+    any_input = name_var.get() or quantity_var.get() or price_var.get()
+
+    if not any_input:
+        status_label.config(
+            text="Show current form status here.",
+            fg=MUTED
+        )
+    elif valid_count == 3:
+        status_label.config(
+            text="\u2714 Form is valid. You may click Submit Product.",
+            fg=GREEN
+        )
+    else:
+        problems = []
+
+        if not n_ok:
+            problems.append("Product Name")
+        if not q_ok:
+            problems.append("Quantity")
+        if not p_ok:
+            problems.append("Unit Price")
+
+        status_label.config(
+            text="\u2716 Please fix: " + ", ".join(problems) + ".",
+            fg=RED
+        )
+
+
+# ---- Real-time validation callbacks -----------------------------------
+def validate_name(*args):
+    name_field.refresh_placeholder()
+    if suppress:
+        return
+
+    ok, _, msg = check_name(name_var.get())
+    name_field.show(ok, msg)
+    refresh_form_status()
+
+
+def validate_quantity(*args):
+    quantity_field.refresh_placeholder()
+    if suppress:
+        return
+
+    ok, _, msg = check_quantity(quantity_var.get())
+    quantity_field.show(ok, msg)
+    refresh_form_status()
+
+
+def validate_price(*args):
+    price_field.refresh_placeholder()
+    if suppress:
+        return
+
+    ok, _, msg = check_price(price_var.get())
+    price_field.show(ok, msg)
+    refresh_form_status()
+
+
+# ---- Log field values when focus leaves the field ---------------------
+def _log_field(label, raw, checker, accepted_word, rejected_word):
+    ok, _, msg = checker(raw)
+    shown = raw if raw.strip() else "(empty)"
+
+    log_trace(
+        f"{label}: {shown}",
+        accepted_word if ok else rejected_word,
+        msg,
+        ok
+    )
+
+
+def log_field_name(event=None):
+    _log_field(
+        "Product name", name_var.get(), check_name,
+        "Accepted", "Error displayed"
+    )
+
+
+def log_field_quantity(event=None):
+    _log_field(
+        "Quantity", quantity_var.get(), check_quantity,
+        "Accepted", "Rejected"
+    )
+
+
+def log_field_price(event=None):
+    _log_field(
+        "Unit price", price_var.get(), check_price,
+        "Accepted", "Rejected"
+    )
+
+
+# ---- Inventory table ---------------------------------------------------
+COLUMNS = {
+    "no": ("No.", "id"),
+    "name": ("Product Name", "name"),
+    "qty": ("Qty", "qty"),
+    "price": ("Unit Price", "price"),
+    "total": ("Total Value", "total")
+}
+
+
+def update_stats():
+    stat_products.config(text=str(len(records)))
+    stat_qty.config(text=f"{sum(r['qty'] for r in records):,}")
+    stat_value.config(text=peso(sum(r["total"] for r in records)))
+
+
+def refresh_table():
+    query = search_var.get().strip().lower()
+    rows = [r for r in records if query in r["name"].lower()]
+
+    if sort_col:
+        key = COLUMNS[sort_col][1]
+        rows.sort(
+            key=lambda r: r[key].lower() if isinstance(r[key], str) else r[key],
+            reverse=sort_reverse
+        )
+
+    tree.delete(*tree.get_children())
+
+    for i, r in enumerate(rows):
+        tree.insert(
+            "",
+            "end",
+            iid=str(r["id"]),
+            values=(
+                r["id"],
+                r["name"],
+                r["qty"],
+                peso(r["price"]),
+                peso(r["total"])
+            ),
+            tags=("odd" if i % 2 else "even",)
+        )
+
+    for col, (text, _) in COLUMNS.items():
+        arrow = ""
+        if col == sort_col:
+            arrow = "  \u25bc" if sort_reverse else "  \u25b2"
+        tree.heading(col, text=text + arrow)
+
+    update_stats()
+
+
+def sort_by(col):
+    global sort_col, sort_reverse
+
+    if sort_col == col:
+        sort_reverse = not sort_reverse
+    else:
+        sort_col, sort_reverse = col, False
+
+    refresh_table()
+
+
+# ---- Submit product ----------------------------------------------------
+def submit_product():
+    """Validate all fields and add the product to inventory."""
+    global next_id
+
+    raw_name = name_var.get()
+    raw_qty = quantity_var.get()
+    raw_price = price_var.get()
+
+    summary = (
+        f"Submit: {raw_name or '(empty)'} / "
+        f"{raw_qty or '(empty)'} / {raw_price or '(empty)'}"
+    )
+
+    name_ok, name, name_m = check_name(raw_name)
+    qty_ok, quantity, qty_m = check_quantity(raw_qty)
+    price_ok, price, price_m = check_price(raw_price)
+
+    errors = []
+
+    if not name_ok:
+        errors.append(f"Product Name: {name_m}")
+    if not qty_ok:
+        errors.append(f"Quantity: {qty_m}")
+    if not price_ok:
+        errors.append(f"Unit Price: {price_m}")
+
+    if errors:
+        name_field.show(name_ok, name_m)
+        quantity_field.show(qty_ok, qty_m)
+        price_field.show(price_ok, price_m)
+        refresh_form_status()
+
+        log_trace(summary, "Rejected", " ; ".join(errors), False)
+        set_footer("Submission rejected.")
+
+        messagebox.showerror(
+            "Invalid Input",
+            "Please correct the following:\n\n" + "\n".join(errors)
+        )
+        return
+
+    try:
+        total = quantity * price
+    except (TypeError, OverflowError):
+        messagebox.showerror(
+            "Error",
+            "Could not compute the total value."
+        )
+        return
+
+    record = {
+        "id": next_id,
+        "name": name,
+        "qty": quantity,
+        "price": price,
+        "total": total
+    }
+
+    next_id += 1
+    records.append(record)
+    refresh_table()
+
+    if tree.exists(str(record["id"])):
+        tree.see(str(record["id"]))
+
+    last_body.config(
+        text=(
+            f"Product Name: {name}\n"
+            f"Quantity: {quantity}\n"
+            f"Unit Price: {peso(price)}\n"
+            f"Total Value: {peso(total)}"
+        ),
+        fg=FG
+    )
+
+    last_status.config(
+        text="Status: Successfully Added",
+        fg=GREEN
+    )
+
+    log_trace(
+        summary,
+        "Product added",
+        f"Successfully Added (Total {peso(total)})",
+        True
+    )
+
+    set_footer(f"Added '{name}'.")
+    messagebox.showinfo(
+        "Success",
+        f"'{name}' was successfully added to the inventory."
+    )
+
+    clear_form(log=False)
+    status_label.config(
+        text="\u2714 Product added successfully.",
+        fg=GREEN
+    )
+
+
+# ---- Clear form --------------------------------------------------------
+def clear_form(log=True):
+    """Empty fields and reset messages without deleting inventory."""
+    global suppress
+
+    suppress = True
+    name_var.set("")
+    quantity_var.set("")
+    price_var.set("")
+    suppress = False
+
+    for field in (name_field, quantity_field, price_field):
+        field.reset()
+
+    refresh_form_status()
+    name_field.entry.focus_set()
+
+    if log:
+        log_trace(
+            "Click Clear Form",
+            "Fields reset",
+            "All fields emptied, messages reset",
+            True
+        )
+        set_footer("Form cleared.")
+
+
+# ---- Inventory actions -------------------------------------------------
+def delete_selected(event=None):
+    selected = tree.selection()
+
+    if not selected:
+        messagebox.showinfo(
+            "Delete Selected",
+            "Select a product row first."
+        )
+        return
+
+    if messagebox.askyesno(
+        "Delete Selected",
+        f"Delete {len(selected)} selected record(s)?"
+    ):
+        ids = {int(i) for i in selected}
+        records[:] = [r for r in records if r["id"] not in ids]
+
+        refresh_table()
+        log_trace(
+            "Delete selected rows",
+            "Records removed",
+            f"{len(ids)} record(s) deleted",
+            True
+        )
+        set_footer("Selected records deleted.")
+
+
+def clear_inventory():
+    if not records:
+        messagebox.showinfo(
+            "Clear Inventory",
+            "There are no records to clear."
+        )
+        return
+
+    if messagebox.askyesno(
+        "Clear Inventory",
+        "Delete ALL submitted inventory records?"
+    ):
+        records.clear()
+        refresh_table()
+        last_body.config(text="No product added yet.", fg=MUTED)
+        last_status.config(text="")
+
+        log_trace(
+            "Click Clear Inventory",
+            "Records removed",
+            "Inventory output cleared",
+            True
+        )
+        set_footer("Inventory cleared.")
+
+
+def export_csv(event=None):
+    if not records:
+        messagebox.showinfo(
+            "Export CSV",
+            "There are no records to export."
+        )
+        return
+
+    path = filedialog.asksaveasfilename(
+        defaultextension=".csv",
+        filetypes=[("CSV files", "*.csv")],
+        initialfile="inventory_export.csv"
+    )
+
+    if not path:
+        return
+
+    try:
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "No.", "Product Name", "Quantity",
+                "Unit Price", "Total Value"
+            ])
+
+            for r in records:
+                writer.writerow([
+                    r["id"],
+                    r["name"],
+                    r["qty"],
+                    f"{r['price']:.2f}",
+                    f"{r['total']:.2f}"
+                ])
+
+    except OSError as err:
+        messagebox.showerror(
+            "Export Failed",
+            f"Could not save file:\n{err}"
+        )
+        return
+
+    log_trace("Export CSV", "File saved", path, True)
+    set_footer("Inventory exported to CSV.")
+
+    messagebox.showinfo(
+        "Export CSV",
+        "Inventory exported successfully."
+    )
+
+
+def save_log():
+    content = log_text.get("1.0", "end").strip()
+
+    if not content:
+        messagebox.showinfo(
+            "Save Log",
+            "The trace log is empty."
+        )
+        return
+
+    path = filedialog.asksaveasfilename(
+        defaultextension=".txt",
+        filetypes=[("Text files", "*.txt")],
+        initialfile="Validation_Trace_Log.txt"
+    )
+
+    if not path:
+        return
+
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(
+                "Test input | Expected response | Actual response\n"
+            )
+            f.write(content + "\n")
+
+    except OSError as err:
+        messagebox.showerror(
+            "Save Failed",
+            f"Could not save file:\n{err}"
+        )
+        return
+
+    set_footer("Trace log saved.")
+
+
+def clear_log():
+    log_text.config(state="normal")
+    log_text.delete("1.0", "end")
+    log_text.config(state="disabled")
+
+
+def tick():
+    header.itemconfig(
+        clock_item,
+        text=datetime.now().strftime("%a, %b %d %Y   %I:%M:%S %p")
+    )
+    root.after(1000, tick)
+
+
+# ======================================================================
+# TASK 1 - GUI LAYOUT
+# ======================================================================
+root.columnconfigure(0, weight=1)
+root.rowconfigure(2, weight=1)
+
+# ---- Gradient header ---------------------------------------------------
+HEADER_H = 78
+
+header = tk.Canvas(
+    root,
+    height=HEADER_H,
+    highlightthickness=0,
+    bg=HEADER_B
+)
+header.grid(row=0, column=0, sticky="ew")
+
+header.create_text(
+    22, 28,
+    text="Robust Inventory Form",
+    anchor="w",
+    font=F_TITLE,
+    fill="white"
+)
+
+header.create_text(
+    22, 55,
+    text="Computer Shop Inventory Management",
+    anchor="w",
+    font=F_SUB,
+    fill="#DBEAFE"
+)
+
+clock_item = header.create_text(
+    900,
+    HEADER_H // 2,
+    text="",
+    anchor="e",
+    font=(FONT, 10, "bold"),
+    fill="white"
+)
+
+
+def draw_header(event=None):
+    width = max(header.winfo_width(), 1)
+    header.delete("grad")
+
+    for x in range(0, width, 3):
+        header.create_rectangle(
+            x, 0, x + 3, HEADER_H,
+            outline="",
+            tags="grad",
+            fill=lerp_color(HEADER_A, HEADER_B, x / width)
+        )
+
+    header.tag_lower("grad")
+    header.coords(clock_item, width - 22, HEADER_H // 2)
+
+
+header.bind("<Configure>", draw_header)
+
+
+# ---- Summary cards -----------------------------------------------------
+stats = tk.Frame(root, bg=BG)
+stats.grid(row=1, column=0, sticky="ew", padx=12, pady=(10, 4))
+
+for c in range(3):
+    stats.columnconfigure(c, weight=1, uniform="stat")
+
+stat_products = make_stat(stats, 0, "TOTAL PRODUCTS")
+stat_qty = make_stat(stats, 1, "TOTAL QUANTITY")
+stat_value = make_stat(stats, 2, "TOTAL INVENTORY VALUE")
+
+
+# ---- Body --------------------------------------------------------------
+body = tk.Frame(root, bg=BG)
+body.grid(row=2, column=0, sticky="nsew", padx=12, pady=4)
+
+body.columnconfigure(0, weight=2, minsize=400)
+body.columnconfigure(1, weight=3)
+body.rowconfigure(0, weight=1)
+
+left = tk.Frame(body, bg=BG)
+left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+
+right = tk.Frame(body, bg=BG)
+right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+right.columnconfigure(0, weight=1)
+right.rowconfigure(0, weight=3)
+right.rowconfigure(1, weight=2)
+
+
+# ---- Product Information card -----------------------------------------
+info_card = make_card(left)
+info_card.pack(fill="x")
+
+card_title(info_card, "Product Information")
+
+name_field = Field(
+    info_card,
+    "Product Name",
+    name_var,
+    "Enter product name...",
+    "Required. Example: Keyboard"
+)
+
+quantity_field = Field(
+    info_card,
+    "Quantity",
+    quantity_var,
+    "Enter quantity...",
+    "Whole number greater than 0"
+)
+
+price_field = Field(
+    info_card,
+    f"Unit Price ({PESO})",
+    price_var,
+    "Enter unit price...",
+    "Number greater than 0"
+)
+
+total_preview = tk.Label(
+    info_card,
+    text="Live total preview:  --",
+    font=(FONT, 10, "bold"),
+    bg=CARD2,
+    fg=MUTED,
+    anchor="w",
+    padx=10,
+    pady=6
+)
+total_preview.pack(fill="x", pady=(0, 8))
+
+btn_row = tk.Frame(info_card, bg=CARD)
+btn_row.pack(fill="x")
+btn_row.columnconfigure(0, weight=1, uniform="b")
+btn_row.columnconfigure(1, weight=1, uniform="b")
+
+make_button(
+    btn_row,
+    "Submit Product",
+    submit_product,
+    "primary"
+).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+make_button(
+    btn_row,
+    "Clear Form",
+    clear_form,
+    "outline"
+).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+
+# ---- Validation Messages card -----------------------------------------
+status_card = make_card(left)
+status_card.pack(fill="both", expand=True, pady=(8, 0))
+
+card_title(status_card, "Validation Messages")
+
+status_label = tk.Label(
+    status_card,
+    text="Show current form status here.",
+    font=(FONT, 10, "bold"),
+    bg=CARD,
+    fg=MUTED,
+    anchor="w",
+    justify="left",
+    wraplength=360
+)
+status_label.pack(fill="x")
+
+progress = ttk.Progressbar(
+    status_card,
+    style="Pink.Horizontal.TProgressbar",
+    maximum=100,
+    length=200
+)
+progress.pack(fill="x", pady=(8, 2))
+
+progress_label = tk.Label(
+    status_card,
+    text="0/3 fields valid",
+    font=F_SMALL,
+    bg=CARD,
+    fg=MUTED,
+    anchor="w"
+)
+progress_label.pack(fill="x")
+
+tk.Label(
+    status_card,
+    bg=CARD,
+    fg=MUTED,
+    font=F_SMALL,
+    anchor="w",
+    justify="left",
+    text=(
+        "Rules:\n"
+        "  \u2022 Product Name must not be empty\n"
+        "  \u2022 Quantity must be a whole number > 0\n"
+        "  \u2022 Unit Price must be a number > 0"
+    )
+).pack(fill="x", pady=(10, 0))
+
+
+# ---- Inventory Output card --------------------------------------------
+out_card = make_card(right)
+out_card.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
+
+title_row = card_title(out_card, "Inventory Output")
+
+search_entry = tk.Entry(
+    title_row,
+    textvariable=search_var,
+    font=F_MSG,
+    bg="white",
+    fg=FG,
+    relief="flat",
+    width=18,
+    highlightthickness=1,
+    highlightbackground=BORDER,
+    highlightcolor=PINK,
+    insertbackground=PINK_DARK
+)
+search_entry.pack(side="right", ipady=3)
+
+tk.Label(
+    title_row,
+    text="Search:",
+    font=F_SMALL,
+    bg=CARD,
+    fg=MUTED
+).pack(side="right", padx=(0, 6))
+
+table_wrap = tk.Frame(out_card, bg=CARD)
+table_wrap.pack(fill="both", expand=True)
+
+tree = ttk.Treeview(
+    table_wrap,
+    columns=list(COLUMNS),
+    show="headings",
+    style="Pink.Treeview",
+    height=6,
+    selectmode="extended"
+)
+
+tree_scroll = ttk.Scrollbar(
+    table_wrap,
+    orient="vertical",
+    style="Pink.Vertical.TScrollbar",
+    command=tree.yview
+)
+
+tree.configure(yscrollcommand=tree_scroll.set)
+
+for col, (text, _) in COLUMNS.items():
+    tree.heading(col, text=text, command=lambda c=col: sort_by(c))
+
+tree.column("no", width=44, anchor="center", stretch=False)
+tree.column("name", width=170, anchor="w")
+tree.column("qty", width=60, anchor="e", stretch=False)
+tree.column("price", width=100, anchor="e")
+tree.column("total", width=120, anchor="e")
+
+tree.tag_configure("even", background="white")
+tree.tag_configure("odd", background="#EFF6FF")
+
+tree.pack(side="left", fill="both", expand=True)
+tree_scroll.pack(side="right", fill="y")
+
+action_row = tk.Frame(out_card, bg=CARD)
+action_row.pack(fill="x", pady=(8, 0))
+
+make_button(
+    action_row,
+    "Delete Selected",
+    delete_selected,
+    "danger"
+).pack(side="left", padx=(0, 6))
+
+make_button(
+    action_row,
+    "Clear Inventory",
+    clear_inventory,
+    "outline"
+).pack(side="left", padx=(0, 6))
+
+make_button(
+    action_row,
+    "Export CSV",
+    export_csv,
+    "outline"
+).pack(side="left")
+
+last_card = tk.Frame(out_card, bg=CARD2, padx=12, pady=8)
+last_card.pack(fill="x", pady=(8, 0))
+
+tk.Label(
+    last_card,
+    text="Latest Product",
+    font=F_LABEL,
+    bg=CARD2,
+    fg=PINK_DARK
+).pack(anchor="w")
+
+last_body = tk.Label(
+    last_card,
+    text="No product added yet.",
+    font=F_ENTRY,
+    bg=CARD2,
+    fg=MUTED,
+    anchor="w",
+    justify="left"
+)
+last_body.pack(fill="x")
+
+last_status = tk.Label(
+    last_card,
+    text="",
+    font=(FONT, 10, "bold"),
+    bg=CARD2,
+    fg=GREEN,
+    anchor="w"
+)
+last_status.pack(fill="x")
+
+
+# ---- Validation Trace Log card ----------------------------------------
+log_card = make_card(right)
+log_card.grid(row=1, column=0, sticky="nsew")
+
+log_title = card_title(log_card, "Validation Trace Log")
+
+make_button(
+    log_title,
+    "Clear",
+    clear_log,
+    "outline"
+).pack(side="right")
+
+make_button(
+    log_title,
+    "Save .txt",
+    save_log,
+    "outline"
+).pack(side="right", padx=(0, 6))
+
+tk.Label(
+    log_card,
+    text="Test input | Expected response | Actual response",
+    font=F_SMALL,
+    bg=CARD,
+    fg=FG
+).pack(anchor="w", pady=(0, 4))
+
+log_wrap = tk.Frame(log_card, bg=CARD)
+log_wrap.pack(fill="both", expand=True)
+
+log_text = tk.Text(
+    log_wrap,
+    font=F_MONO,
+    bg="white",
+    fg=FG,
+    relief="flat",
+    wrap="word",
+    height=6,
+    state="disabled",
+    highlightthickness=1,
+    highlightbackground=BORDER
+)
+
+log_scroll = ttk.Scrollbar(
+    log_wrap,
+    orient="vertical",
+    style="Pink.Vertical.TScrollbar",
+    command=log_text.yview
+)
+
+log_text.configure(yscrollcommand=log_scroll.set)
+log_text.pack(side="left", fill="both", expand=True)
+log_scroll.pack(side="right", fill="y")
+
+log_text.tag_config("time", foreground="#64748B")
+log_text.tag_config("ok", foreground=GREEN)
+log_text.tag_config("bad", foreground=RED)
+
+
+# ---- Footer ------------------------------------------------------------
+footer = tk.Frame(root, bg=BG)
+footer.grid(row=3, column=0, sticky="ew", padx=14, pady=(2, 8))
+
+tk.Label(
+    footer,
+    bg=BG,
+    fg=MUTED,
+    font=F_SMALL,
+    text=(
+        "Enter = Submit   |   Esc = Clear Form   |   "
+        "Delete = Remove row   |   Ctrl+E = Export CSV"
+    )
+).pack(side="left")
+
+footer_status = tk.Label(
+    footer,
+    text="Ready",
+    bg=BG,
+    fg=PINK_DARK,
+    font=(FONT, 9, "bold")
+)
+footer_status.pack(side="right")
+
+
+# ======================================================================
+# TASK 2 - REAL-TIME VALIDATION + EVENTS
+# ======================================================================
+name_var.trace_add("write", validate_name)
+quantity_var.trace_add("write", validate_quantity)
+price_var.trace_add("write", validate_price)
+search_var.trace_add("write", lambda *a: refresh_table())
+
+name_field.entry.bind("<FocusOut>", log_field_name, add="+")
+quantity_field.entry.bind("<FocusOut>", log_field_quantity, add="+")
+price_field.entry.bind("<FocusOut>", log_field_price, add="+")
+
+for field in (name_field, quantity_field, price_field):
+    field.entry.bind("<Return>", lambda e: submit_product())
+
+root.bind("<Escape>", lambda e: clear_form())
+root.bind("<Control-e>", export_csv)
+tree.bind("<Delete>", delete_selected)
+
+log_text.config(state="normal")
+log_text.insert(
+    "end",
+    "Trace log ready. Type in the form to record tests.\n",
+    "time"
+)
+log_text.config(state="disabled")
+
+refresh_table()
+refresh_form_status()
+tick()
+name_field.entry.focus_set()
+
+root.mainloop()
